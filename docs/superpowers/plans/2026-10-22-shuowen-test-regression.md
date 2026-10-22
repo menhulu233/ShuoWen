@@ -163,15 +163,18 @@ void TestHotkeyMatching() {
   Check(OwnModBit(VK_LWIN) == GlobalHotkey::kModWin, "own mod left win");
   Check(OwnModBit('A') == 0, "own mod plain key");
 
-  Check(HotkeyMatches(VK_RCONTROL, VK_RCONTROL, GlobalHotkey::kModCtrl,
-                      GlobalHotkey::kModCtrl),
+  // The binding modifiers are the extra modifiers required besides the
+  // trigger key itself; the default binding is right Ctrl with none.
+  Check(HotkeyMatches(VK_RCONTROL, VK_RCONTROL, 0, GlobalHotkey::kModCtrl),
         "right ctrl binding matches");
-  Check(!HotkeyMatches(VK_LCONTROL, VK_RCONTROL, GlobalHotkey::kModCtrl,
-                       GlobalHotkey::kModCtrl),
+  Check(!HotkeyMatches(VK_LCONTROL, VK_RCONTROL, 0, GlobalHotkey::kModCtrl),
         "left ctrl does not match right ctrl binding");
-  Check(!HotkeyMatches(VK_RCONTROL, VK_RCONTROL, GlobalHotkey::kModCtrl,
+  Check(!HotkeyMatches(VK_RCONTROL, VK_RCONTROL, 0,
                        GlobalHotkey::kModCtrl | GlobalHotkey::kModShift),
         "extra modifier breaks match");
+  Check(HotkeyMatches(VK_RCONTROL, VK_RCONTROL, GlobalHotkey::kModShift,
+                      GlobalHotkey::kModCtrl | GlobalHotkey::kModShift),
+        "binding with required modifier matches");
   Check(HotkeyMatches('A', 'A', 0, 0), "plain key binding matches");
 
   Check(CapturedMods(VK_RCONTROL, GlobalHotkey::kModCtrl | GlobalHotkey::kModAlt) ==

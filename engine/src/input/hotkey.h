@@ -50,6 +50,12 @@ class GlobalHotkey {
   CaptureHandler on_capture_;
 };
 
+// Pure matching helpers shared by the keyboard hook and the self-tests.
+int OwnModBit(int vk);
+bool HotkeyMatches(int vk, int binding_vk, int binding_mods,
+                   int current_mods);
+int CapturedMods(int vk, int current_mods);
+
 std::string HotkeyName(int vk);
 
 }  // namespace shuowen

@@ -25,6 +25,10 @@ constexpr int kVkLWin = 0x5B;
 constexpr int kVkRWin = 0x5C;
 constexpr int kVkEscape = 0x1B;
 
+bool IsModifier(int vk) { return OwnModBit(vk) != 0; }
+
+}  // namespace
+
 int OwnModBit(int vk) {
   switch (vk) {
     case kVkLControl:
@@ -47,9 +51,16 @@ int OwnModBit(int vk) {
   }
 }
 
-bool IsModifier(int vk) { return OwnModBit(vk) != 0; }
+bool HotkeyMatches(int vk, int binding_vk, int binding_mods,
+                   int current_mods) {
+  if (vk != binding_vk) return false;
+  const int effective = current_mods & ~OwnModBit(vk);
+  return effective == binding_mods;
+}
 
-}  // namespace
+int CapturedMods(int vk, int current_mods) {
+  return current_mods & ~OwnModBit(vk);
+}
 
 GlobalHotkey::~GlobalHotkey() { Uninstall(); }
 
@@ -143,9 +154,7 @@ void GlobalHotkey::UpdateModifier(int vk, bool down) {
 }
 
 bool GlobalHotkey::Matches(int vk) const {
-  if (vk != vk_) return false;
-  const int effective = CurrentMods() & ~OwnModBit(vk);
-  return effective == mods_;
+  return HotkeyMatches(vk, vk_, mods_, CurrentMods());
 }
 
 LRESULT CALLBACK GlobalHotkey::HookProc(int code, WPARAM wparam, LPARAM lparam) {
@@ -174,7 +183,7 @@ LRESULT GlobalHotkey::Handle(int code, WPARAM wparam, LPARAM lparam) {
   else if (is_up) UpdateModifier(vk, false);
 
   if (capture_ && is_down) {
-    const int captured_mods = CurrentMods() & ~OwnModBit(vk);
+    const int captured_mods = CapturedMods(vk, CurrentMods());
     capture_ = false;
     LogF("hotkey: captured vk=0x%02X mods=%d (%s)", vk, captured_mods,
          HotkeyName(vk).c_str());
