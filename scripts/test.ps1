@@ -19,12 +19,14 @@ if ($Build) {
 
 if (Want "engine") {
     Write-Host "== engine: selftest =="
-    $selftest = Join-Path $root "dist\shuowen_selftest.exe"
+    # Prefer the freshly built binary; the copy under dist may lag behind the
+    # source tree until scripts\package.ps1 runs again.
+    $selftest = Join-Path $root "engine\build\bin\shuowen_selftest.exe"
     if (-not (Test-Path $selftest)) {
-        $selftest = Join-Path $root "engine\build\bin\shuowen_selftest.exe"
+        $selftest = Join-Path $root "dist\shuowen_selftest.exe"
     }
     if (-not (Test-Path $selftest)) {
-        $results.engine = "SKIP (selftest missing; run with -Build)"
+        $results.engine = "SKIP (selftest missing; run scripts\_build_engine.bat or -Build)"
     } else {
         $env:SHUOWEN_MODELS_DIR = Join-Path $root "dist\models"
         $env:SHUOWEN_TEST_WAV_DIR = Join-Path $root "engine\tests\fixtures"
