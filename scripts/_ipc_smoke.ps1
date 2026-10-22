@@ -33,6 +33,22 @@ function Read-Response {
     }
 }
 
+# Same as Read-Response, but also reports the broadcast events that arrived
+# before the matching response.
+function Read-ResponseCollect {
+    param($Reader, [int]$Id)
+    $events = @()
+    while ($true) {
+        $line = $Reader.ReadLine()
+        if ($null -eq $line) { throw "pipe closed while waiting for response id=$Id" }
+        $obj = $line | ConvertFrom-Json
+        if ($obj.PSObject.Properties.Name -contains "id" -and $obj.id -eq $Id) {
+            return @{ response = $obj; events = $events }
+        }
+        if ($obj.PSObject.Properties.Name -contains "event") { $events += $obj.event }
+    }
+}
+
 $pipe = $null
 $engine = $null
 $started = $false
@@ -76,6 +92,45 @@ try {
     $writer.WriteLine('{"id":3,"cmd":"settings.get"}')
     $settings = Read-Response -Reader $reader -Id 3
     Write-Output ("settings.get.ok=" + $settings.ok)
+
+    # --- protocol regressions ---
+    $writer.WriteLine('{"id":10,"cmd":"nope"}')
+    $bad = Read-Response -Reader $reader -Id 10
+    if ($bad.ok) { throw "unknown command should fail" }
+    if (-not $bad.error.code) { throw "unknown command should carry error.code" }
+    Write-Output ("unknownCommand.code=" + $bad.error.code)
+
+    $writer.WriteLine('{"id":11,"cmd":"settings.patch","args":{"patch":[1,2]}}')
+    $badPatch = Read-Response -Reader $reader -Id 11
+    if ($badPatch.ok) { throw "array patch should fail" }
+    Write-Output ("badPatch.code=" + $badPatch.error.code)
+
+    $originalStay = [double]$settings.data.HudStaySeconds
+    $writer.WriteLine('{"id":12,"cmd":"settings.patch","args":{"patch":{"HudStaySeconds":0.75}}}')
+    $collected = Read-ResponseCollect -Reader $reader -Id 12
+    if (-not $collected.response.ok) { throw "settings.patch failed" }
+    if ($collected.events -notcontains "settings") {
+        throw "settings.patch did not broadcast a settings event"
+    }
+    Write-Output ("settings.patch.broadcast=" + ($collected.events -join ","))
+
+    $writer.WriteLine('{"id":13,"cmd":"settings.get"}')
+    $after = Read-Response -Reader $reader -Id 13
+    if ([double]$after.data.HudStaySeconds -ne 0.75) {
+        throw "settings.patch did not stick"
+    }
+    Write-Output "settings.patch.roundtrip=ok"
+
+    $writer.WriteLine(('{"id":14,"cmd":"settings.patch","args":{"patch":{"HudStaySeconds":' + $originalStay + '}}}'))
+    $restored = Read-Response -Reader $reader -Id 14
+    if (-not $restored.ok) { throw "restore failed" }
+    Write-Output "settings.patch.restore=ok"
+
+    $writer.WriteLine('{"id":15,"cmd":"history.list","args":{"limit":5}}')
+    $hist = Read-Response -Reader $reader -Id 15
+    if (-not $hist.ok) { throw "history.list failed" }
+    if ($null -eq $hist.data.lifetimeChars) { throw "history lifetimeChars missing" }
+    Write-Output ("history.entries=" + @($hist.data.entries).Count)
 
     if ($started -and -not $KeepEngine) {
         $writer.WriteLine('{"id":4,"cmd":"app.quit"}')
