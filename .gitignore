@@ -27,3 +27,14 @@ doc/api/
 
 .flutter-plugins
 .flutter-plugins-dependencies
+
+# ShuoWen build outputs and local packaging
+/dist/
+/engine/build/
+/ui/build/
+/ui/.dart_tool/
+/.tmp/
+
+# Local diagnostics / screenshots
+/*.png
+/*.log
