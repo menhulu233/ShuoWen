@@ -1,10 +1,17 @@
 #include <windows.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <string>
+#include <thread>
+#include <vector>
 
+#include "asr/asr_backend.h"
+#include "asr/dictation.h"
 #include "config.h"
 #include "input/hotkey.h"
 #include "input/type_output.h"
@@ -17,6 +24,85 @@
 namespace {
 
 int g_failures = 0;
+
+// Deterministic stand-in for the sherpa-onnx recognizer: the dictation
+// worker loop only needs to observe what it was asked to do.
+class FakeAsr : public shuowen::AsrBackend {
+ public:
+  bool ready() const override { return true; }
+  void Accept(const float* samples, size_t count) override {
+    (void)samples;
+    accepted_samples_ += count;
+    ++accept_calls_;
+  }
+  std::string Partial() override {
+    return "p" + std::to_string(++partial_queries_);
+  }
+  std::string Finalize() override {
+    ++finalize_calls_;
+    std::lock_guard<std::mutex> lock(final_mutex_);
+    const std::string out = final_text_;
+    final_text_.clear();
+    return out;
+  }
+  void ResetStream() override { ++reset_calls_; }
+  void VadAccept(const float* samples, size_t count) override {
+    ++vad_accept_calls_;
+    vad_samples_ += count;
+    if (!samples || count == 0) return;
+    // The test drives the VAD state through the first sample of each frame:
+    // 1.0 = speech, 0.0 = silence, -1.0 = silence that closes a segment.
+    const float marker = samples[0];
+    if (marker > 0.5f) {
+      vad_speech_.store(true);
+      vad_segment_.store(false);
+    } else if (marker < -0.5f) {
+      vad_speech_.store(false);
+      vad_segment_.store(true);
+    } else {
+      vad_speech_.store(false);
+      vad_segment_.store(false);
+    }
+  }
+  bool VadSpeech() const override { return vad_speech_.load(); }
+  bool VadHasSegment() const override { return vad_segment_.load(); }
+  void VadPopSegment() override { vad_segment_.store(false); }
+  void VadFlush() override { ++vad_flush_calls_; }
+  void VadReset() override {
+    vad_speech_.store(false);
+    vad_segment_.store(false);
+  }
+
+  void SetFinalText(const std::string& text) {
+    std::lock_guard<std::mutex> lock(final_mutex_);
+    final_text_ = text;
+  }
+
+  std::string final_text_;
+  std::atomic<int> accept_calls_{0};
+  std::atomic<int> vad_accept_calls_{0};
+  std::atomic<int> finalize_calls_{0};
+  std::atomic<int> reset_calls_{0};
+  std::atomic<int> vad_flush_calls_{0};
+  std::atomic<size_t> accepted_samples_{0};
+  std::atomic<size_t> vad_samples_{0};
+  std::atomic<bool> vad_speech_{false};
+  std::atomic<bool> vad_segment_{false};
+
+ private:
+  std::atomic<int> partial_queries_{0};
+  std::mutex final_mutex_;
+};
+
+bool WaitFor(const std::function<bool()>& pred, int timeout_ms = 3000) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (pred()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return pred();
+}
 
 void Check(bool condition, const char* name) {
   if (condition) {
@@ -78,6 +164,177 @@ void TestHotkeyMatching() {
                      GlobalHotkey::kModCtrl | GlobalHotkey::kModAlt) ==
             GlobalHotkey::kModAlt,
         "capture excludes trigger modifier");
+}
+
+void TestDictationHold() {
+  using namespace shuowen;
+  FakeAsr asr;
+  Dictation dictation(asr, DictationMode::Paste);
+  std::atomic<int> partials{0};
+  std::atomic<int> finals{0};
+  std::string final_text;
+  bool final_end = false;
+  dictation.OnPartial([&](const std::string&, float) { ++partials; });
+  dictation.OnFinal([&](const std::string& text, const std::string&, bool end) {
+    final_text = text;
+    final_end = end;
+    ++finals;
+  });
+
+  dictation.Start();
+  std::vector<float> frame(480, 0.1f);
+  dictation.BeginHold();
+  dictation.PushFrame(frame.data(), frame.size());
+  Check(WaitFor([&] { return partials.load() >= 1; }),
+        "hold emits partial");
+
+  asr.SetFinalText("你好。");
+  dictation.EndHold();
+  Check(WaitFor([&] { return finals.load() == 1; }), "hold emits one final");
+  Check(final_text == "你好。", "final text comes from backend");
+  Check(final_end, "final reports end_of_hold");
+  Check(asr.finalize_calls_.load() == 1, "finalize called once");
+
+  dictation.EndHold();
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  Check(finals.load() == 1, "redundant end hold does not finalize twice");
+  dictation.Stop();
+}
+
+void TestDictationThrottle() {
+  using namespace shuowen;
+  FakeAsr asr;
+  Dictation dictation(asr, DictationMode::Paste);
+  std::atomic<int> partials{0};
+  dictation.OnPartial([&](const std::string&, float) { ++partials; });
+  dictation.Start();
+  dictation.BeginHold();
+
+  std::vector<float> frame(480, 0.1f);
+  for (int i = 0; i < 5; ++i) dictation.PushFrame(frame.data(), frame.size());
+  Check(WaitFor([&] { return asr.accept_calls_.load() >= 5; }),
+        "burst frames reach backend");
+  Check(partials.load() == 1, "partial throttled inside 150ms");
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(180));
+  dictation.PushFrame(frame.data(), frame.size());
+  Check(WaitFor([&] { return partials.load() == 2; }),
+        "partial resumes after throttle window");
+  dictation.Cancel();
+  dictation.Stop();
+}
+
+void TestDictationPreroll() {
+  using namespace shuowen;
+  FakeAsr asr;
+  Dictation dictation(asr, DictationMode::Paste);
+  dictation.Start();
+  std::vector<float> frame(480, 0.1f);
+  for (int i = 0; i < 5; ++i) dictation.PushFrame(frame.data(), frame.size());
+  std::this_thread::sleep_for(std::chrono::milliseconds(80));
+  Check(asr.accept_calls_.load() == 0,
+        "frames pushed before hold are not accepted");
+
+  dictation.BeginHold();
+  dictation.PushFrame(frame.data(), frame.size());
+  Check(WaitFor([&] { return asr.accepted_samples_.load() >= 6 * 480; }),
+        "preroll samples replayed into backend");
+  dictation.Cancel();
+  dictation.Stop();
+}
+
+void TestDictationCancel() {
+  using namespace shuowen;
+  FakeAsr asr;
+  Dictation dictation(asr, DictationMode::Paste);
+  std::atomic<int> finals{0};
+  std::string final_text = "sentinel";
+  bool final_end = false;
+  dictation.OnFinal([&](const std::string& text, const std::string&, bool end) {
+    final_text = text;
+    final_end = end;
+    ++finals;
+  });
+  dictation.Start();
+  std::vector<float> frame(480, 0.1f);
+  dictation.BeginHold();
+  dictation.PushFrame(frame.data(), frame.size());
+  Check(WaitFor([&] { return asr.accept_calls_.load() >= 1; }), "accepted");
+
+  asr.SetFinalText("不应出现");
+  dictation.Cancel();
+  Check(WaitFor([&] { return finals.load() == 1; }), "cancel emits final");
+  Check(final_text.empty(), "cancel final carries empty text");
+  Check(final_end, "cancel final reports end_of_hold");
+  Check(asr.finalize_calls_.load() == 0, "cancel skips finalize");
+  Check(asr.reset_calls_.load() >= 1, "cancel resets stream");
+  dictation.Stop();
+}
+
+void TestDictationPause() {
+  using namespace shuowen;
+  FakeAsr asr;
+  Dictation dictation(asr, DictationMode::Paste);
+  dictation.Start();
+  dictation.SetPaused(true);
+  std::this_thread::sleep_for(std::chrono::milliseconds(60));
+  const int accepts_before = asr.accept_calls_.load();
+  const int vads_before = asr.vad_accept_calls_.load();
+
+  std::vector<float> frame(480, 0.1f);
+  dictation.BeginHold();
+  dictation.PushFrame(frame.data(), frame.size());
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  Check(asr.accept_calls_.load() == accepts_before,
+        "paused dictation does not accept audio");
+  Check(asr.vad_accept_calls_.load() == vads_before,
+        "paused dictation does not feed VAD");
+
+  dictation.SetPaused(false);
+  dictation.PushFrame(frame.data(), frame.size());
+  Check(WaitFor([&] { return asr.accept_calls_.load() > accepts_before; }),
+        "resume accepts audio again");
+  dictation.Cancel();
+  dictation.Stop();
+}
+
+void TestDictationOnCall() {
+  using namespace shuowen;
+  FakeAsr asr;
+  Dictation dictation(asr, DictationMode::OnCall);
+  std::atomic<int> finals{0};
+  std::vector<std::string> texts;
+  dictation.OnFinal([&](const std::string& text, const std::string&, bool) {
+    texts.push_back(text);
+    ++finals;
+  });
+  dictation.Start();
+  std::vector<float> speech(480, 0.1f);
+  speech[0] = 1.0f;   // VAD marker: speech
+  std::vector<float> silence(480, 0.0f);
+  std::vector<float> segment_end(480, 0.0f);
+  segment_end[0] = -1.0f;  // VAD marker: silence closing a segment
+
+  dictation.PushFrame(speech.data(), speech.size());
+  Check(WaitFor([&] { return asr.accept_calls_.load() >= 1; }),
+        "oncall accepts speech");
+
+  asr.SetFinalText("第一段");
+  dictation.PushFrame(segment_end.data(), segment_end.size());
+  Check(WaitFor([&] { return finals.load() == 1; }),
+        "oncall finalizes first segment");
+
+  dictation.PushFrame(silence.data(), silence.size());
+  dictation.PushFrame(speech.data(), speech.size());
+  Check(WaitFor([&] { return asr.accept_calls_.load() >= 3; }),
+        "oncall accepts the second segment");
+  asr.SetFinalText("第二段");
+  dictation.PushFrame(segment_end.data(), segment_end.size());
+  Check(WaitFor([&] { return finals.load() == 2; }),
+        "oncall finalizes second segment");
+  Check(texts.size() == 2 && texts[0] == "第一段" && texts[1] == "第二段",
+        "oncall finals do not concatenate");
+  dictation.Stop();
 }
 
 void TestTypeOutput() {
@@ -228,6 +485,12 @@ int main() {
   TestJson();
   TestText();
   TestHotkeyMatching();
+  TestDictationHold();
+  TestDictationThrottle();
+  TestDictationPreroll();
+  TestDictationCancel();
+  TestDictationPause();
+  TestDictationOnCall();
   TestTypeOutput();
   TestModelPaths();
   TestModelPresence(dir);
