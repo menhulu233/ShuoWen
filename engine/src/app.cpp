@@ -13,6 +13,7 @@
 #include "config.h"
 #include "input/cue.h"
 #include "input/inserter.h"
+#include "input/type_output.h"
 #include "util/log.h"
 #include "util/text.h"
 
@@ -263,17 +264,6 @@ std::string App::AppendHistory(const std::string& text,
     BroadcastEvent("history", data);
   }
   return entry.id;
-}
-
-std::wstring App::PostProcess(const std::string& text) const {
-  std::wstring wide = Utf8ToWide(text);
-  bool traditional = false;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    traditional = settings_.output_traditional;
-  }
-  if (traditional) wide = ToTraditional(wide);
-  return wide;
 }
 
 Json App::StateJson() const {
@@ -760,22 +750,28 @@ void App::OnPartial(const std::string& text, float level) {
   std::string typed;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    last_partial_ = text;
     typed = typed_text_;
+  }
+  const TypeOutputPlan plan =
+      PlanTypeOutput(typed, text, settings.output_traditional);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    last_partial_ = plan.next_utf8;
     hud_visible_ = true;
     hud_state_ = "listening";
-    hud_text_ = text;
+    hud_text_ = plan.next_utf8;
     hud_level_ = level;
   }
 
-  if (settings.mode == DictationMode::Type && !text.empty() && text != typed) {
-    TextInserter::ReplaceWith(Utf8ToWide(typed), Utf8ToWide(text));
+  if (settings.mode == DictationMode::Type && !plan.next_utf8.empty() &&
+      plan.changed) {
+    TextInserter::ReplaceWith(plan.previous, plan.next);
     std::lock_guard<std::mutex> lock(mutex_);
-    typed_text_ = text;
+    typed_text_ = plan.next_utf8;
   }
 
   Json data = Json::Object();
-  data.Set("text", Json(text));
+  data.Set("text", Json(plan.next_utf8));
   data.Set("level", Json(level));
   BroadcastEvent("partial", data);
   BroadcastEvent("hud", HudJson());
@@ -787,7 +783,8 @@ void App::OnPartial(const std::string& text, float level) {
 void App::OnFinal(const std::string& text, const std::string& mode,
                   bool end_of_hold) {
   const Settings settings = CopySettings();
-  const std::wstring processed = PostProcess(text);
+  const std::wstring processed =
+      PostProcessText(text, settings.output_traditional);
   const std::string final_text = WideToUtf8(processed);
   std::string typed;
   {

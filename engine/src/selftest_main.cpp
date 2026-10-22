@@ -7,6 +7,7 @@
 
 #include "config.h"
 #include "input/hotkey.h"
+#include "input/type_output.h"
 #include "models/paths.h"
 #include "store/history.h"
 #include "store/settings.h"
@@ -49,6 +50,19 @@ void TestText() {
         "common prefix by code point");
   Check(CodePointSuffix(L"a🙂b", 1) == L"🙂b", "suffix by code point");
   Check(HotkeyName(0xA3) == "RightCtrl", "hotkey name");
+}
+
+void TestTypeOutput() {
+  using namespace shuowen;
+  const auto first = PlanTypeOutput("", "这是测试", true);
+  Check(first.changed, "type output reports first partial");
+  Check(first.next_utf8 == "這是測試", "type partial uses traditional output");
+  Check(first.next == L"這是測試", "type partial wide output is traditional");
+
+  const auto stable = PlanTypeOutput(first.next_utf8, "这是测试", true);
+  Check(!stable.changed, "unchanged traditional partial is not retyped");
+  Check(PostProcessText("这是", true) == L"這是", "post process traditional");
+  Check(PostProcessText("这是", false) == L"这是", "post process keeps simplified");
 }
 
 void TestModelPaths() {
@@ -185,6 +199,7 @@ int main() {
   std::printf("ShuoWen engine selftest\n");
   TestJson();
   TestText();
+  TestTypeOutput();
   TestModelPaths();
   TestModelPresence(dir);
   TestSettings(dir);

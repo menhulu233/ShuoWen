@@ -68,7 +68,6 @@ class App {
   void OnHotkeyCancel();
   void OnHotkeyCaptured(int vk, int mods);
 
-  std::wstring PostProcess(const std::string& text) const;
   std::string AppendHistory(const std::string& text, const std::string& mode);
   void UpdateTrayStatus();
 

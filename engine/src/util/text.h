@@ -24,6 +24,7 @@ size_t CommonPrefixCodePoints(const std::wstring& a, const std::wstring& b);
 std::wstring CodePointSuffix(const std::wstring& text, size_t skipCodePoints);
 
 std::wstring ToTraditional(const std::wstring& text);
+std::wstring PostProcessText(const std::string& text, bool traditional);
 
 std::string NowIso8601();
 int64_t NowUnixMs();

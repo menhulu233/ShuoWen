@@ -129,7 +129,10 @@ ASR 模型四档（160/480/960/1920 ms）可通过设置页下载；VAD 也可�
 ```powershell
 .\dist\shuowen_selftest.exe
 cd ui; flutter analyze
+powershell -ExecutionPolicy Bypass -File .\scripts\_ipc_smoke.ps1
 ```
+
+`scripts\_ipc_smoke.ps1` 会自动拉起 `dist\shuowen_engine.exe`、完成一次命名管道握手并取回引擎快照；引擎已在运行时则复用它，且不会替用户关闭引擎。
 
 手动验收：
 

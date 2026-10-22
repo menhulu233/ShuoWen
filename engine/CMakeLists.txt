@@ -22,6 +22,7 @@ set(SHUOWEN_SOURCES
   src/audio/wasapi.cpp
   src/input/hotkey.cpp
   src/input/inserter.cpp
+  src/input/type_output.cpp
   src/input/cue.cpp
   src/asr/sherpa_api.cpp
   src/asr/sherpa_engine.cpp

@@ -204,6 +204,12 @@ std::wstring ToTraditional(const std::wstring& text) {
   return out;
 }
 
+std::wstring PostProcessText(const std::string& text, bool traditional) {
+  std::wstring wide = Utf8ToWide(text);
+  if (traditional) wide = ToTraditional(wide);
+  return wide;
+}
+
 std::string NowIso8601() {
   SYSTEMTIME utc;
   GetSystemTime(&utc);
