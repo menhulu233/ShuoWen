@@ -1,10 +1,14 @@
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <string>
 #include <thread>
@@ -12,6 +16,7 @@
 
 #include "asr/asr_backend.h"
 #include "asr/dictation.h"
+#include "asr/sherpa_engine.h"
 #include "config.h"
 #include "input/hotkey.h"
 #include "input/type_output.h"
@@ -102,6 +107,148 @@ bool WaitFor(const std::function<bool()>& pred, int timeout_ms = 3000) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
   return pred();
+}
+
+struct WavData {
+  std::vector<float> samples;
+  int sample_rate = 0;
+};
+
+bool LoadWav(const std::filesystem::path& path, WavData* out,
+             std::string* error) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    if (error) *error = "cannot open " + path.string();
+    return false;
+  }
+  auto read_u32 = [&]() {
+    unsigned char b[4] = {0, 0, 0, 0};
+    in.read(reinterpret_cast<char*>(b), 4);
+    return static_cast<uint32_t>(b[0]) | (static_cast<uint32_t>(b[1]) << 8) |
+           (static_cast<uint32_t>(b[2]) << 16) |
+           (static_cast<uint32_t>(b[3]) << 24);
+  };
+  auto read_u16 = [&]() {
+    unsigned char b[2] = {0, 0};
+    in.read(reinterpret_cast<char*>(b), 2);
+    return static_cast<uint16_t>(b[0] | (b[1] << 8));
+  };
+  char riff[4] = {0};
+  char wave[4] = {0};
+  in.read(riff, 4);
+  (void)read_u32();
+  in.read(wave, 4);
+  if (!in || std::memcmp(riff, "RIFF", 4) != 0 ||
+      std::memcmp(wave, "WAVE", 4) != 0) {
+    if (error) *error = "not a wav file: " + path.string();
+    return false;
+  }
+  while (in) {
+    char id[4] = {0};
+    if (!in.read(id, 4)) break;
+    const uint32_t size = read_u32();
+    if (std::memcmp(id, "fmt ", 4) == 0) {
+      const uint16_t format = read_u16();
+      const uint16_t channels = read_u16();
+      const int rate = static_cast<int>(read_u32());
+      (void)read_u32();  // byte rate
+      (void)read_u16();  // block align
+      const uint16_t bits = read_u16();
+      if (format != 1 || channels != 1 || bits != 16) {
+        if (error) *error = "expect 16-bit mono pcm wav";
+        return false;
+      }
+      out->sample_rate = rate;
+      if (size > 16) {
+        in.seekg(static_cast<std::streamoff>(size - 16), std::ios::cur);
+      }
+    } else if (std::memcmp(id, "data", 4) == 0) {
+      std::vector<int16_t> pcm(size / 2);
+      in.read(reinterpret_cast<char*>(pcm.data()),
+              static_cast<std::streamsize>(pcm.size() * 2));
+      out->samples.resize(pcm.size());
+      for (size_t i = 0; i < pcm.size(); ++i) {
+        out->samples[i] = static_cast<float>(pcm[i]) / 32768.0f;
+      }
+      if (out->sample_rate != shuowen::kSampleRate || out->samples.empty()) {
+        if (error) *error = "unexpected wav format";
+        return false;
+      }
+      return true;
+    } else {
+      in.seekg(static_cast<std::streamoff>(size + (size & 1)), std::ios::cur);
+    }
+  }
+  if (error) *error = "wav data chunk missing: " + path.string();
+  return false;
+}
+
+std::filesystem::path ExeDir() {
+  wchar_t buffer[MAX_PATH];
+  const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+  if (length == 0 || length >= MAX_PATH) return {};
+  return std::filesystem::path(buffer).parent_path();
+}
+
+std::filesystem::path EnvPath(const char* name) {
+  const char* value = std::getenv(name);
+  return value ? std::filesystem::path(value) : std::filesystem::path();
+}
+
+std::filesystem::path FindModelsDir() {
+  const auto env = EnvPath("SHUOWEN_MODELS_DIR");
+  if (!env.empty() && std::filesystem::exists(env)) return env;
+  const auto exe = ExeDir();
+  const std::filesystem::path candidates[] = {
+      exe / L"models", exe / L".." / L".." / L"dist" / L"models",
+      exe / L".." / L".." / L".." / L"dist" / L"models"};
+  for (const auto& candidate : candidates) {
+    std::error_code ec;
+    if (std::filesystem::exists(candidate, ec)) return candidate;
+  }
+  return {};
+}
+
+std::filesystem::path FindWavDir() {
+  const auto env = EnvPath("SHUOWEN_TEST_WAV_DIR");
+  if (!env.empty() && std::filesystem::exists(env)) return env;
+  const auto exe = ExeDir();
+  const std::filesystem::path candidates[] = {
+      exe / L"tests" / L"fixtures",
+      exe / L".." / L".." / L"tests" / L"fixtures",
+      exe / L".." / L"engine" / L"tests" / L"fixtures",
+      exe / L".." / L".." / L"engine" / L"tests" / L"fixtures"};
+  for (const auto& candidate : candidates) {
+    std::error_code ec;
+    if (std::filesystem::exists(candidate, ec)) return candidate;
+  }
+  return {};
+}
+
+std::wstring StripForCompare(const std::wstring& text) {
+  std::wstring out;
+  for (wchar_t ch : text) {
+    if (ch == L' ' || ch == L'\t' || ch == L'。' || ch == L'.' ||
+        ch == L'，' || ch == L',' || ch == L'！' || ch == L'!' ||
+        ch == L'？' || ch == L'?')
+      continue;
+    out.push_back(ch);
+  }
+  return out;
+}
+
+int EditDistance(const std::wstring& a, const std::wstring& b) {
+  std::vector<int> prev(b.size() + 1), cur(b.size() + 1);
+  for (size_t j = 0; j <= b.size(); ++j) prev[j] = static_cast<int>(j);
+  for (size_t i = 1; i <= a.size(); ++i) {
+    cur[0] = static_cast<int>(i);
+    for (size_t j = 1; j <= b.size(); ++j) {
+      const int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+      cur[j] = std::min({prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost});
+    }
+    prev.swap(cur);
+  }
+  return prev[b.size()];
 }
 
 void Check(bool condition, const char* name) {
@@ -337,6 +484,100 @@ void TestDictationOnCall() {
   dictation.Stop();
 }
 
+bool ReplayAsr(const std::filesystem::path& models,
+               const std::filesystem::path& wav,
+               const std::string& expected_utf8, std::string* final_utf8,
+               std::string* error) {
+  using namespace shuowen;
+  WavData audio;
+  if (!LoadWav(wav, &audio, error)) return false;
+
+  auto paths = ModelPaths::ForTier(960);
+  paths.writable_root = models;
+  paths.bundled_root = models;
+  if (!paths.AsrPresent()) {
+    if (error) *error = "model files missing in " + models.string();
+    return false;
+  }
+
+  SherpaEngine engine;
+  std::string load_error;
+  if (!engine.Load(paths, VadKind::Silero, &load_error)) {
+    if (error) *error = load_error;
+    return false;
+  }
+
+  Dictation dictation(engine, DictationMode::Paste);
+  std::atomic<bool> got_final{false};
+  std::string text;
+  dictation.OnFinal([&](const std::string& value, const std::string&, bool) {
+    text = value;
+    got_final = true;
+  });
+  dictation.Start();
+  dictation.BeginHold();
+  const size_t chunk = 480;  // 30 ms at 16 kHz
+  for (size_t offset = 0; offset < audio.samples.size(); offset += chunk) {
+    const size_t count = std::min(chunk, audio.samples.size() - offset);
+    dictation.PushFrame(audio.samples.data() + offset, count);
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  }
+  dictation.EndHold();
+  const bool ok = WaitFor([&] { return got_final.load(); }, 8000);
+  dictation.Stop();
+  engine.Unload();
+  if (!ok) {
+    if (error) *error = "no final within 8s";
+    return false;
+  }
+  if (final_utf8) *final_utf8 = text;
+
+  const std::wstring actual = StripForCompare(Utf8ToWide(text));
+  const std::wstring expected = StripForCompare(Utf8ToWide(expected_utf8));
+  const int distance = EditDistance(actual, expected);
+  const int allowed =
+      std::max<int>(2, static_cast<int>(expected.size()) * 3 / 10);
+  if (distance > allowed) {
+    if (error) {
+      *error = "text mismatch: actual='" + WideToUtf8(actual) +
+               "' expected='" + WideToUtf8(expected) +
+               "' distance=" + std::to_string(distance) +
+               " allowed=" + std::to_string(allowed);
+    }
+    return false;
+  }
+  return true;
+}
+
+void TestAsrReplay() {
+  const auto models = FindModelsDir();
+  const auto wav_dir = FindWavDir();
+  if (models.empty()) {
+    std::printf("SKIP  asr replay: models dir not found\n");
+    return;
+  }
+  if (wav_dir.empty()) {
+    std::printf("SKIP  asr replay: fixtures dir not found\n");
+    return;
+  }
+  const auto zh_wav = wav_dir / L"zh_greeting.wav";
+  const auto en_wav = wav_dir / L"en_hello.wav";
+  if (!std::filesystem::exists(zh_wav) || !std::filesystem::exists(en_wav)) {
+    std::printf("SKIP  asr replay: wav fixtures missing\n");
+    return;
+  }
+
+  std::string final_text;
+  std::string error;
+  const bool zh = ReplayAsr(models, zh_wav, "今天天气不错", &final_text, &error);
+  Check(zh, "asr replay zh greeting");
+  if (!zh) std::printf("      %s\n", error.c_str());
+
+  const bool en = ReplayAsr(models, en_wav, "hello world", &final_text, &error);
+  Check(en, "asr replay en hello");
+  if (!en) std::printf("      %s\n", error.c_str());
+}
+
 void TestTypeOutput() {
   using namespace shuowen;
   const auto first = PlanTypeOutput("", "这是测试", true);
@@ -491,6 +732,7 @@ int main() {
   TestDictationCancel();
   TestDictationPause();
   TestDictationOnCall();
+  TestAsrReplay();
   TestTypeOutput();
   TestModelPaths();
   TestModelPresence(dir);
