@@ -326,7 +326,9 @@ dist\
 ### 13.2 覆盖缺口
 
 - 听写热路径（麦克风 → ASR → 上屏）**没有自动化用例**，M1 / M2 的人工部分只能靠人工复测，代码里无从判定是否真的过了。
+  - 2026-10-22 已补：`engine/src/selftest_main.cpp` 用 `FakeAsr` 覆盖听写状态机（节流、preroll、取消、暂停、OnCall 分段），并用 TTS 语音素材（`engine/tests/fixtures`）驱动真实模型做 WAV 回放，断言识别文本与标点补全；素材由 `scripts/make_test_fixtures.ps1` 生成。
 - UI 侧有 5 个单测（L10n 英文回退、四语言 key 完整性、占位符完整性、热键标签、字数/时长估算），仍未覆盖 IPC 编解码、窗口尺寸、圆角与置顶。
+  - 2026-10-22 已补：`ui/test/engine_client_test.dart` 覆盖客户端快照、事件、错误与断线；`scripts/_hud_window_smoke.ps1` 覆盖 HUD 层的点击穿透样式、层属性、尺寸、圆角与实际渲染；`scripts/_ipc_smoke.ps1` 覆盖未知命令错误码、参数校验、设置往返与广播事件。统一入口 `scripts\test.ps1`。
 - 模型下载依赖外网与 CDN 可用性，本次未做端到端下载验证；Silero VAD 只验证了「已安装副本可被引擎加载」。
 - `scripts\_ipc_smoke.ps1` 可自起引擎、也可复用已在运行的引擎；复用时不会替用户关闭引擎。
 

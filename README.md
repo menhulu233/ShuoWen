@@ -126,10 +126,23 @@ ASR 模型四档（160/480/960/1920 ms）可通过设置页下载；VAD 也可�
 
 ## 验证
 
+一键跑全量回归（引擎自测 + UI 分析与单测 + IPC 冒烟 + HUD 窗口回归）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1
+```
+
+- `-Only engine,ui,ipc,window` 只跑指定层，`-Build` 先执行 `scripts\package.ps1` 完整构建再测。
+- 引擎自测包含两条**真实识别回放**：用 TTS 生成的语音素材（`engine\tests\fixtures`）驱动真实模型，断言识别文本；缺模型或素材时自动打印 `SKIP`，不影响其余用例。
+- HUD 窗口回归会检查点击穿透样式与层属性（`WS_EX_LAYERED` + 不透明 alpha）、尺寸、圆角区域，并抓取窗口像素确认真的渲染出了界面——这一条锁住了「HUD 显示成黑窗口」的回归。
+
+单独跑某一层：
+
 ```powershell
 .\dist\shuowen_selftest.exe
-cd ui; flutter analyze
+cd ui; flutter analyze; flutter test
 powershell -ExecutionPolicy Bypass -File .\scripts\_ipc_smoke.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\_hud_window_smoke.ps1
 ```
 
 `scripts\_ipc_smoke.ps1` 会自动拉起 `dist\shuowen_engine.exe`、完成一次命名管道握手并取回引擎快照；引擎已在运行时则复用它，且不会替用户关闭引擎。
