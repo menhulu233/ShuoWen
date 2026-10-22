@@ -46,13 +46,13 @@ v1 已交付，但架构文档明确记录了三处覆盖缺口：听写热路�
 
 | 用例 | 场景与断言 |
 |---|---|
-| Hold 基本流 | `BeginHold` → `PushFrame`×N → `EndHold`；partial 回调至少 1 次、final 恰好 1 次，final 文本经 `NormalizeCjk` + `EnsureFinalPunct` |
-| partial 节流 | 150 ms 内连续推帧，partial 回调次数不超过节流窗口数；文本不变时不重复广播 |
-| preroll | 语音开始前的 300 ms 帧在起始后被送入 backend（FakeAsr 记录 `Accept` 帧数） |
-| Cancel | `BeginHold` → 推帧 → `Cancel`：无 final 回调，backend 流被重置 |
-| Pause | `SetPaused(true)` 期间推帧：backend 收不到帧，level 回调为 0 |
-| OnCall 分段 | 模拟 VAD 段结束两次：产生两次 final，文本不串联 |
-| final 后重置 | 每次 final 后 FakeAsr 收到 `ResetStream`；下一轮 hold 的 partial 不继承上一轮文本 |
+| Hold 基本流 | `BeginHold` → `PushFrame`×N → `EndHold`；partial 至少 1 次；final 恰好 1 次、`end_of_hold=true`、文本原样来自 backend（后处理在 App/SherpaEngine 层，由 L1 覆盖） |
+| partial 节流 | 150 ms 内连续推帧且文本变化，partial 只广播 1 次；等待 >150 ms 后再推帧广播第 2 次；文本不变时不重复广播 |
+| preroll | `BeginHold` 之前推入的帧在起始后送入 backend（FakeAsr 记录 `accepted_samples ≥ preroll_samples + 当前帧`） |
+| Cancel | final 文本为空且 `end_of_hold=true`；backend 收到 `ResetStream` 且未调用 `Finalize` |
+| Pause | `SetPaused(true)` 期间推帧：backend 收不到 `Accept`/`VadAccept`（preroll 仍累积） |
+| OnCall 分段 | 模拟两段 VAD 结束：产生两次 final，文本不串联 |
+| 重复 EndHold | 第二次 `EndHold` 不产生第二个 final |
 
 时间相关行为使用真实 `steady_clock`，用例总时长控制在 2 秒内，不引入虚拟时钟。Type 模式的 `PlanTypeOutput` 在 `App` 层（`app.cpp:756`），已由 L1 的 Type 输出用例覆盖，L2 不重复。
 
