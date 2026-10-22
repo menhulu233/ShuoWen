@@ -3,6 +3,7 @@
 #include <deque>
 #include <string>
 
+#include "asr/asr_backend.h"
 #include "asr/sherpa_api.h"
 #include "models/paths.h"
 #include "store/settings.h"
@@ -12,7 +13,7 @@ namespace shuowen {
 // Streaming zipformer2 transducer + VAD, using the sherpa-onnx C ABI.
 // Silero VAD is used when its ONNX file is present; otherwise an energy VAD
 // keeps OnCall usable without any extra model.
-class SherpaEngine {
+class SherpaEngine : public AsrBackend {
  public:
   SherpaEngine() = default;
   ~SherpaEngine();
@@ -22,19 +23,19 @@ class SherpaEngine {
 
   bool Load(const ModelPaths& paths, VadKind vad, std::string* error);
   void Unload();
-  bool ready() const { return recognizer_ != nullptr; }
+  bool ready() const override { return recognizer_ != nullptr; }
 
-  void Accept(const float* samples, size_t count);
-  std::string Partial();
-  std::string Finalize();
-  void ResetStream();
+  void Accept(const float* samples, size_t count) override;
+  std::string Partial() override;
+  std::string Finalize() override;
+  void ResetStream() override;
 
-  void VadAccept(const float* samples, size_t count);
-  bool VadSpeech() const;
-  bool VadHasSegment() const;
-  void VadPopSegment();
-  void VadFlush();
-  void VadReset();
+  void VadAccept(const float* samples, size_t count) override;
+  bool VadSpeech() const override;
+  bool VadHasSegment() const override;
+  void VadPopSegment() override;
+  void VadFlush() override;
+  void VadReset() override;
   std::string VadName() const;
   std::string Version() const;
 

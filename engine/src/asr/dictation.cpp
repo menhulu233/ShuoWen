@@ -8,7 +8,7 @@
 
 namespace shuowen {
 
-Dictation::Dictation(SherpaEngine& engine, DictationMode mode)
+Dictation::Dictation(AsrBackend& engine, DictationMode mode)
     : engine_(engine), mode_(mode) {
   if (mode == DictationMode::OnCall) capturing_.store(true);
 }

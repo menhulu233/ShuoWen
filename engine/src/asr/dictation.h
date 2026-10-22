@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "asr/sherpa_engine.h"
+#include "asr/asr_backend.h"
 #include "audio/frame_queue.h"
 #include "store/settings.h"
 
@@ -23,7 +23,7 @@ class Dictation {
       std::function<void(const std::string&, const std::string&, bool)>;
   using LevelFn = std::function<void(float)>;
 
-  Dictation(SherpaEngine& engine, DictationMode mode);
+  Dictation(AsrBackend& engine, DictationMode mode);
   ~Dictation();
 
   Dictation(const Dictation&) = delete;
@@ -60,7 +60,7 @@ class Dictation {
   static constexpr int kLevelIntervalMs = 50;
   static constexpr int kPttSegmentAfterMs = 4000;
 
-  SherpaEngine& engine_;
+  AsrBackend& engine_;
   FrameQueue frames_{1024};
   std::thread worker_;
   std::atomic<bool> running_{false};
