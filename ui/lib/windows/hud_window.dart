@@ -81,7 +81,7 @@ class _HudWindowState extends State<HudWindow> with WindowListener {
       _shown = true;
       await Win32Window.showHud();
       await windowManager.setAlwaysOnTop(true);
-      await windowManager.setIgnoreMouseEvents(true);
+      await Win32Window.setClickThrough();
     }
   }
 

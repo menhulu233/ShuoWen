@@ -82,6 +82,9 @@ ShuowenIpc::ShuowenIpc(HWND window, flutter::FlutterEngine* engine)
         } else if (call.method_name() == "window.showHud") {
           ShowHud();
           result->Success();
+        } else if (call.method_name() == "window.setClickThrough") {
+          SetClickThrough();
+          result->Success();
         } else if (call.method_name() == "window.hide") {
           HideWindow();
           result->Success();
@@ -166,6 +169,18 @@ void ShuowenIpc::ShowHud() {
   } else {
     ShowWindow(window_, SW_SHOWNOACTIVATE);
   }
+}
+
+void ShuowenIpc::SetClickThrough() {
+  if (!window_) return;
+  // Click-through requires WS_EX_LAYERED, but a layered window whose
+  // attributes are never set is not composited and shows as a black
+  // rectangle. The opaque alpha keeps the HUD fully visible while
+  // WS_EX_TRANSPARENT lets mouse events fall through to the app below.
+  const LONG_PTR style = GetWindowLongPtrW(window_, GWL_EXSTYLE);
+  SetWindowLongPtrW(window_, GWL_EXSTYLE,
+                    style | WS_EX_LAYERED | WS_EX_TRANSPARENT);
+  SetLayeredWindowAttributes(window_, 0, 255, LWA_ALPHA);
 }
 
 void ShuowenIpc::HideWindow() {

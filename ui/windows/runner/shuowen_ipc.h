@@ -50,6 +50,7 @@ class ShuowenIpc {
   void Disconnect();
   void ShowInactive(bool no_activate);
   void ShowHud();
+  void SetClickThrough();
   void HideWindow();
   void ReadLoop();
   void Emit(const std::string& line);

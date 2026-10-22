@@ -97,6 +97,21 @@ class Win32Window {
     }
   }
 
+  /// Makes the window click-through while keeping it fully opaque.
+  ///
+  /// window_manager's setIgnoreMouseEvents only toggles WS_EX_LAYERED
+  /// without ever calling SetLayeredWindowAttributes; such a window is not
+  /// composited and renders as a black rectangle. The native path pairs the
+  /// flag with an opaque alpha so the HUD renders normally while ignoring
+  /// the mouse.
+  static Future<void> setClickThrough() async {
+    try {
+      await _channel.invokeMethod<void>('window.setClickThrough');
+    } catch (_) {
+      // Window operations must never break the UI.
+    }
+  }
+
   /// Clips a frameless window to a rounded rectangle. Flutter on Windows does
   /// not expose per-pixel transparency cheaply; a window region gives clean
   /// rounded corners without a compositor workaround.

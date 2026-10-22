@@ -116,7 +116,7 @@ Future<void> _configureWindow(String windowType) async {
   }
 
   if (windowType == 'hud') {
-    await _step('ignoreMouse', () => windowManager.setIgnoreMouseEvents(true));
+    await _step('clickThrough', () => Win32Window.setClickThrough());
     // ShowHud() positions the window on the foreground monitor whenever it
     // becomes visible; positioning here would only target the primary screen.
     await Future<void>.delayed(const Duration(milliseconds: 450));
