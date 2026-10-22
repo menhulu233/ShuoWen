@@ -16,13 +16,16 @@ class EngineException implements Exception {
 class EngineClient extends ChangeNotifier {
   EngineClient(this.windowType);
 
+  /// Test seam: talks to [pipe] instead of the native runner client.
+  EngineClient.withPipe(this.windowType, this._pipe);
+
   final String windowType;
 
   final Map<int, Completer<Map<String, dynamic>>> _pending = {};
   final StreamController<Map<String, dynamic>> _events =
       StreamController<Map<String, dynamic>>.broadcast();
 
-  PluginPipeClient? _pipe;
+  PipeClient? _pipe;
   StreamSubscription<String>? _lineSub;
   Timer? _reconnectTimer;
   bool _disposed = false;
